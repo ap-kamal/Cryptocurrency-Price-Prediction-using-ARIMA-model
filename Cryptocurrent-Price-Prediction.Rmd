@@ -1,0 +1,308 @@
+---
+title: "Cryptocurrency Price Prediction using ARIMA"
+author: "Kamalnath Sathyamurthy"
+date: "9/16/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Installing all the required libraries
+library(base)
+library(caret)
+library(datasets)
+library(dplyr)
+library(forecast)
+library(GGally)
+library(ggplot2)
+library(graphics)
+library(grDevices)
+library(lattice)
+library(lubridate)
+library(methods)
+library(Metrics)
+library(mlbench)
+library(mltools)
+library(stats)
+library(tseries)
+library(utils)
+library(repr)
+library(ggplot2)
+library(ggpubr)
+library(hrbrthemes)
+library(plotly)
+library(plotrix)
+library(extrafont)
+font_import()
+loadfonts(device = "postscript")
+```
+
+## Cryptocurrency:
+Cryptocurrency is a new form of asset which is used for paying or investing digitally. The upsurge in the various cryptocurrency prices over the past 10 years has increased the curiosity of researchers and investors to analyze and forecast its prices in the future. The primary focus of this research is to develop an Autoregressive Integrated Moving Average (ARIMA) model, which is a time-series statistical model, for forecasting the cryptocurrency prices. This research focuses on six different cryptocurrencies – Bitcoin, Doge Coin, Ethereum, Binance Coin, XRP and Cardano due to their popularity, and discusses the price movements and the stability of these cryptocurrencies using various exploratory data analysis techniques and visualization techniques. The dataset for these six coins has been collected from Kaggle datasets and has been merged into a single dataset. In this research, the dataset has a record of the prices of these six cryptocurrencies dated from 2018 to 2021. 
+
+### About dataset:
+Crypto-Currency dataset by Kaggle consists of 244855 observations of six popular cryptocurrency details with 6 independent and 1 dependent variables. Please find the sample dataset below,
+
+```{r ethereum dataset}
+eth_raw_data = read.csv('ethusdt.csv')
+head(eth_raw_data, 10)
+```
+
+### Data Pre-processing:
+We have converted the dataset into dataset with daily data i.e. each data will have only one record instead of multiple records. We have taken opening of first record and closing of last record for any particular day.
+
+```{r agg_function}
+aggregating_data <- function(raw_data, cryptoname){
+  idx =1
+  # creating new data frame to copy the cleaned dataset
+  new_data_frame = data.frame(Date = as.Date(character()),Open = double(),High = double(),Low=double(),Close = double(),Volume = double(),Cryptocurrency = character())
+  
+  volume = 0;
+  low = 0
+  high = 0
+  for(row in 1:nrow(raw_data)){
+    date_time = raw_data[row,"Date"]
+    date = strsplit(date_time," ")[[1]][1]
+    time = strsplit(date_time," ")[[1]][2]
+    if(grepl("00:00:00",time,fixed=TRUE)){
+      new_data_frame[idx,"Date"] = date
+      new_data_frame[idx,"Open"] = raw_data[row,"Open"]
+      low = raw_data[row,"Low"]
+      high = raw_data[row,"High"]
+      volume = volume + raw_data[row,"Volume"]
+    }
+    else if(grepl("23:30:00",time,fixed=TRUE)){
+      new_data_frame[idx,"Close"] = raw_data[row,"Close"]
+      volume = volume + raw_data[row,"Volume"]
+      if(low>raw_data[row,"Low"]){
+        low = raw_data[row,"Low"]
+      }
+      if(high < raw_data[row,"High"]){
+        high = raw_data[row,"High"]
+      }
+      new_data_frame[idx,"Volume"] = volume
+      new_data_frame[idx,"Low"] = low
+      new_data_frame[idx,"High"] = high
+      new_data_frame[idx,"Cryptocurrency"] = cryptoname
+      volume = 0;
+      idx = idx+1;
+    }
+    else{
+      if(low>raw_data[row,"Low"]){
+        low = raw_data[row,"Low"]
+      }
+      if(high < raw_data[row,"High"]){
+        high = raw_data[row,"High"]
+      }
+      volume = volume + raw_data[row,"Volume"]
+    }
+  }
+  
+  imputed_data <- new_data_frame
+  imputed_data <- na.omit(imputed_data)
+  imputed_data$Date = as.Date(imputed_data$Date,format='%Y-%m-%d')
+  return(imputed_data)
+}
+
+eth_imputed_data <- aggregating_data(eth_raw_data, "Ethereum")
+head(eth_imputed_data, 10)
+```
+
+We can see that for every record above indicates aggregated data of ethereum on any particular day.
+
+```{r other_crypto_processing}
+# binance data processing
+binance_raw_data <- read.csv('bnbusdt.csv')
+binance_imputed_data <- aggregating_data(binance_raw_data, "Binance")
+
+# bitcoin data processsing
+bitcoin_raw_data <- read.csv('btcusdt.csv')
+bitcoin_imputed_data <- aggregating_data(bitcoin_raw_data, "Bitcoin")
+
+# doge coin data processing
+dodge_raw_data <- read.csv('dogeusdt.csv')
+dodge_imputed_data <- aggregating_data(dodge_raw_data, "Doge")
+
+# xrp data processing
+xrp_raw_data <- read.csv('xrpusdt.csv')
+xrp_imputed_data <- aggregating_data(xrp_raw_data, "XRP")
+
+# cardano data procesing
+cardano_raw_data <- read.csv('adausdt.csv')
+cardano_imputed_data <- aggregating_data(cardano_raw_data, "Cardano")
+
+```
+
+#### Merging all the data
+
+All the six crypto-currencies datasets are merged to one dataset where a column indicating cryptocurrency name is created for clear understanding of the trends.
+
+```{r merge, echo=FALSE}
+complete_data = rbind(eth_imputed_data, cardano_imputed_data, binance_imputed_data, bitcoin_imputed_data , dodge_imputed_data, xrp_imputed_data)
+complete_data <- na.omit(complete_data) # removing null values
+write.csv(x=complete_data, file = "CryptoFinal.csv")
+data <- read.csv("CryptoFinal.csv")
+head(data, 10)
+df_grp_cryp = data %>% group_by(Cryptocurrency) %>%
+                   summarise(min_Open = min(Open),
+                             max_Close = max(Close),
+                             max_Volume = max(Volume),
+                             .groups = 'drop')
+head(df_grp_cryp)
+```
+
+
+### Visualization:
+
+#### Observing trend in Closing price of various cryptocurrencies
+
+```{r eda, echo=FALSE}
+eth_plot <- eth_imputed_data %>%
+  ggplot(aes(x=Date,y=Close))+geom_area(fill = "#69b3a2",alpha = 0.5)+geom_line(color="#69b3a2")+ylab("Closing Price ($)")+ylim(0,max(eth_imputed_data$Close)) + ggtitle("Date vs Closing Price of Ethereum Cryptocurrency")
+ggplotly(eth_plot)
+
+cardano_plot = cardano_imputed_data %>%
+  ggplot(aes(x=Date,y=Close))+geom_area(fill = "#69b3a2",alpha = 0.5)+geom_line(color="#69b3a2")+ylab("Closing Price ($)")+ylim(0,max(cardano_imputed_data$Close)) + ggtitle("Date vs Closing Price of Cardano Cryptocurrency")
+ggplotly(cardano_plot)
+
+binance_plot = binance_imputed_data %>%
+  ggplot(aes(x=Date,y=Close))+geom_area(fill = "#69b3a2",alpha = 0.5)+geom_line(color="#69b3a2")+ylab("Closing Price ($)")+ylim(0,max(binance_imputed_data$Close)) + ggtitle("Date vs Closing Price of binance Cryptocurrency")
+ggplotly(binance_plot)
+
+bitcoin_plot = bitcoin_imputed_data %>%
+  ggplot(aes(x=Date,y=Close))+geom_area(fill = "#69b3a2",alpha = 0.5)+geom_line(color="#69b3a2")+ylab("Closing Price ($)")+ylim(0,max(bitcoin_imputed_data$Close)) + ggtitle("Date vs Closing Price of bitcoin Cryptocurrency")
+ggplotly(bitcoin_plot)
+
+doge_plot = dodge_imputed_data %>%
+  ggplot(aes(x=Date,y=Close))+geom_area(fill = "#69b3a2",alpha = 0.5)+geom_line(color="#69b3a2")+ylab("Closing Price ($)")+ylim(0,max(dodge_imputed_data$Close)) + ggtitle("Date vs Closing Price of doge Cryptocurrency")
+ggplotly(doge_plot)
+
+xrp_plot = xrp_imputed_data %>%
+  ggplot(aes(x=Date,y=Close))+geom_area(fill = "#69b3a2",alpha = 0.5)+geom_line(color="#69b3a2")+ylab("Closing Price ($)")+ylim(0,max(xrp_imputed_data$Close)) + ggtitle("Date vs Closing Price of XRP Cryptocurrency")
+ggplotly(xrp_plot)
+
+
+figure <- ggarrange(cardano_plot, binance_plot, bitcoin_plot, doge_plot, eth_plot, xrp_plot,
+                    labels = c("CARDANO", "Binance Coin", "Bitcoin", "Doge Coin", "Ethereum", "XRP"),
+                    ncol = 2, nrow = 3)
+figure
+```
+
+#### Pie chart for highly traded crypto
+
+```{r highly_traded_crypto}
+pi = as.data.frame(data %>% 
+                     group_by(Cryptocurrency) %>% 
+                     summarise(Frequency = sum(Volume*Close)))
+pct <- round(pi$Frequency/sum(pi$Frequency)*100)
+lbls = pi$Cryptocurrency
+lbls <- paste(lbls, pct)
+lbls <- paste(lbls,"%",sep="")
+pie3D(pi$Frequency,labels=lbls, col=c("skyblue","skyblue3","paleturquoise3","paleturquoise4","grey","white"),main = "Volume of Cryptocurrencies traded")
+```
+#### Converting data into timeseries data
+
+```{r timeseries_conv}
+####### Creating Time-series object for each cryptocurrencies #######
+
+close_ts_eth <- eth_imputed_data[,c("Date", "Close")] %>% arrange(Date)
+eth_ts_data = close_ts_eth
+close_ts_eth <- ts(eth_ts_data$Close,
+                   start = c(as.numeric(format(eth_ts_data$Date[1], "%Y")), as.numeric(format(eth_ts_data$Date[1], "%j"))),
+                   end = c(as.numeric(format(eth_ts_data$Date[nrow(eth_ts_data)], "%Y")), as.numeric(format(eth_ts_data$Date[nrow(eth_ts_data)], "%j"))),
+                   frequency = 365)
+
+
+close_ts_btc <- bitcoin_imputed_data[,c("Date", "Close")] %>% arrange(Date)
+btc_ts_data = close_ts_btc
+close_ts_btc <- ts(btc_ts_data$Close,
+                   start = c(as.numeric(format(btc_ts_data$Date[1], "%Y")), as.numeric(format(btc_ts_data$Date[1], "%j"))),
+                   end = c(as.numeric(format(btc_ts_data$Date[nrow(btc_ts_data)], "%Y")), as.numeric(format(btc_ts_data$Date[nrow(btc_ts_data)], "%j"))),
+                   frequency = 365)
+
+
+close_ts_ada <- cardano_imputed_data[,c("Date", "Close")] %>% arrange(Date)
+ada_ts_data = close_ts_ada
+close_ts_ada <- ts(ada_ts_data$Close,
+                   start = c(as.numeric(format(ada_ts_data$Date[1], "%Y")), as.numeric(format(ada_ts_data$Date[1], "%j"))),
+                   end = c(as.numeric(format(ada_ts_data$Date[nrow(ada_ts_data)], "%Y")), as.numeric(format(ada_ts_data$Date[nrow(ada_ts_data)], "%j"))),
+                   frequency = 365)
+
+
+close_ts_bin <- binance_imputed_data[,c("Date", "Close")] %>% arrange(Date)
+bin_ts_data = close_ts_bin
+close_ts_bin <- ts(bin_ts_data$Close,
+                   start = c(as.numeric(format(bin_ts_data$Date[1], "%Y")), as.numeric(format(bin_ts_data$Date[1], "%j"))),
+                   end = c(as.numeric(format(bin_ts_data$Date[nrow(bin_ts_data)], "%Y")), as.numeric(format(bin_ts_data$Date[nrow(bin_ts_data)], "%j"))),
+                   frequency = 365)
+
+close_ts_doge <- dodge_imputed_data[,c("Date", "Close")] %>% arrange(Date)
+doge_ts_data = close_ts_doge
+close_ts_doge <- ts(doge_ts_data$Close,
+                    start = c(as.numeric(format(doge_ts_data$Date[1], "%Y")), as.numeric(format(doge_ts_data$Date[1], "%j"))),
+                    end = c(as.numeric(format(doge_ts_data$Date[nrow(doge_ts_data)], "%Y")), as.numeric(format(doge_ts_data$Date[nrow(doge_ts_data)], "%j"))),
+                    frequency = 365)
+
+close_ts_xrp <- xrp_imputed_data[,c("Date", "Close")] %>% arrange(Date)
+xrp_ts_data = close_ts_xrp
+close_ts_xrp <- ts(xrp_ts_data$Close,
+                   start = c(as.numeric(format(xrp_ts_data$Date[1], "%Y")), as.numeric(format(xrp_ts_data$Date[1], "%j"))),
+                   end = c(as.numeric(format(xrp_ts_data$Date[nrow(xrp_ts_data)], "%Y")), as.numeric(format(xrp_ts_data$Date[nrow(xrp_ts_data)], "%j"))),
+                   frequency = 365)
+
+head(close_ts_btc, 5)
+```
+
+### Obtaining trends and seasonality of cryptocurrency price:
+
+``` {r decompose}
+dects_eth <- decompose(close_ts_eth) 
+plot(dects_eth)
+
+dects_btc <- decompose(close_ts_btc) 
+plot(dects_btc)
+
+dects_ada <- decompose(close_ts_ada) 
+plot(dects_ada)
+
+dects_xrp <- decompose(close_ts_xrp)
+plot(dects_xrp)
+
+# dects_bin <- decompose(close_ts_bin)
+# plot(dects_bin)
+
+# dects_doge <- decompose(close_ts_doge) 
+# plot(dects_doge)
+```
+### model building for each crypto 
+
+``` {r model_building}
+close_arima_eth <- auto.arima(close_ts_eth,D=1)
+
+close_arima_btc <- auto.arima(close_ts_btc,D=1)
+
+close_arima_bin <- auto.arima(close_ts_bin,D=1)
+
+close_arima_ada <- auto.arima(close_ts_ada,D=1)
+
+close_arima_doge <- auto.arima(close_ts_doge,D=1)
+
+close_arima_xrp <- auto.arima(close_ts_xrp,D=1)
+```
+
+### Forecasting model
+
+``` {r forecasting}
+
+par(mfrow=c(3,2))
+
+#### Forecasting model ####
+
+plot(forecast(close_arima_eth),main="Ethereum Coin Forecasting")
+plot(forecast(close_arima_btc),main="Bitcoin Forecasting")
+plot(forecast(close_arima_ada),main="Cardano Forecasting")
+plot(forecast(close_arima_xrp),main="XRP coin Forecasting")
+plot(forecast(close_arima_bin),main="Binance coin Forecasting")
+plot(forecast(close_arima_doge),main="Dogecoin Forecasting")
+
+```
